@@ -5,7 +5,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta name="theme-color" content="#f7f7fb">
   <title>Фраза — музыкальная доска</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -24,25 +23,31 @@
       <button data-tool="select" class="active" title="Выбор">
         ↖<small>Выбор</small>
       </button>
-      <button data-tool="hand" title="Перемещение доски">
-        ✋<small>Доска</small>
-      </button>
       <hr>
 
-      <button id="uploadImage" title="Загрузить изображение">
-        ▧<small>Картинка</small>
+      <button data-tool="sticky" title="Стикер">
+        ▧<small>Стикер</small>
+      </button>
+      <button data-tool="text" title="Текст">
+        T<small>Текст</small>
+      </button>
+      <button data-tool="pen" title="Карандаш">
+        ✎<small>Карандаш</small>
+      </button>
+      <button data-tool="eraser" title="Ластик">
+        ⌫<small>Ластик</small>
+      </button>
+
+      <button id="imageUpload" title="Добавить изображение">
+        ▧<small>Изображение</small>
       </button>
       <input
+        id="imageFiles"
         type="file"
-        id="imageInput"
         accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
         hidden
       >
-
-      <button data-tool="sticky">▤<small>Стикер</small></button>
-      <button data-tool="text">T<small>Текст</small></button>
-      <button data-tool="pen">✎<small>Карандаш</small></button>
-      <button data-tool="eraser" title="Ластик">⌫<small>Ластик</small></button>
 
       <button id="shapes" title="Фигуры" aria-expanded="false">
         ◇<small>Фигуры</small>
@@ -51,13 +56,14 @@
       <hr>
       <span class="label">МУЗЫКА</span>
 
-      <button data-tool="staff">𝄞<small>Ноты</small></button>
-      <button data-tool="chord">♬<small>Аккорд</small></button>
-      <button data-tool="symbol">♫<small>Пометка</small></button>
-
-      <hr>
-      <button id="vocalEffects" title="Библиотека вокальных приёмов">
-        ≋<small>Вокал</small>
+      <button data-tool="staff" title="Нотный стан">
+        𝄞<small>Ноты</small>
+      </button>
+      <button data-tool="chord" title="Аккорд">
+        ♬<small>Аккорд</small>
+      </button>
+      <button data-tool="symbol" title="Вокальная пометка">
+        ♫<small>Пометка</small>
       </button>
     </nav>
 
@@ -69,10 +75,15 @@
       </div>
 
       <div id="hint">
-        Выберите инструмент, загрузите изображение или перемещайтесь по доске
+        Выберите инструмент или перетащите объект по доске
       </div>
 
-      <div id="palette" class="flyout" aria-label="Цвет инструмента" aria-hidden="true">
+      <div
+        id="palette"
+        class="flyout"
+        aria-label="Цвет инструмента"
+        aria-hidden="true"
+      >
         <span>Цвет</span>
         <button data-color="yellow" aria-label="Жёлтый" title="Жёлтый"></button>
         <button data-color="pink" aria-label="Розовый" title="Розовый"></button>
@@ -82,7 +93,12 @@
         <button data-color="dark" aria-label="Чёрный" title="Чёрный"></button>
       </div>
 
-      <div id="shapesMenu" class="flyout shape-flyout" aria-label="Фигуры" aria-hidden="true">
+      <div
+        id="shapesMenu"
+        class="flyout shape-flyout"
+        aria-label="Фигуры"
+        aria-hidden="true"
+      >
         <button data-tool="circle" data-shape="circle" aria-label="Круг">○</button>
         <button data-tool="square" data-shape="square" aria-label="Квадрат">□</button>
         <button data-tool="circle" data-shape="ellipse" aria-label="Овал">⬭</button>
@@ -91,38 +107,20 @@
         <button data-tool="square" data-shape="diamond" aria-label="Ромб">◇</button>
       </div>
 
-      <section id="vocalPanel" class="flyout vocal-panel" aria-label="Вокальные приёмы" aria-hidden="true">
-        <div class="panel-heading">
-          <strong>Вокальные приёмы</strong>
-          <button id="closeVocalEffects" title="Закрыть">✕</button>
-        </div>
-        <input
-          id="vocalSearch"
-          type="search"
-          placeholder="Найти приём…"
-          aria-label="Поиск вокального приёма"
-        >
-        <div id="vocalCategories"></div>
-        <div id="vocalEffectList"></div>
-        <p class="sub">Выберите приём, затем разместите его на доске.</p>
-      </section>
-
       <div id="contextMenu" hidden>
         <button id="contextDelete">Удалить</button>
       </div>
 
       <div class="bottom">
-        <div class="tip">
-          Двойной щелчок по тексту — редактировать
-          <span> · Правой кнопкой мыши — перемещение доски</span>
-        </div>
-
+        <div class="tip">Двойной щелчок по тексту — редактировать</div>
         <div class="controls">
           <button id="delete" title="Удалить выбранный объект">⌫</button>
-          <button id="minus" title="Уменьшить масштаб">−</button>
-          <button id="zoom" title="Текущий масштаб">100%</button>
-          <button id="plus" title="Увеличить масштаб">＋</button>
-          <button id="fitBoard" title="Показать все объекты">⛶</button>
+          <button id="minus" title="Уменьшить">−</button>
+          <button id="zoomReset" title="Вернуть 100%">
+            <span id="zoom">100%</span>
+          </button>
+          <button id="plus" title="Увеличить">＋</button>
+          <button id="fit" title="Показать всё содержимое">Всё</button>
         </div>
       </div>
     </main>
@@ -142,7 +140,11 @@
     <h2>Новая доска</h2>
     <label>
       Название или имя ученика
-      <input id="boardName" maxlength="80" placeholder="Например, Маша">
+      <input
+        id="boardName"
+        maxlength="80"
+        placeholder="Например, Маша"
+      >
     </label>
     <p>
       Иконка
@@ -165,12 +167,16 @@
     <p>Свободное пространство для урока, идей и музыки.</p>
     <button id="create" class="primary">Создать доску</button>
     <button id="welcomeCatalog">Мои доски</button>
-    <p class="sub">Отправьте ссылку ученику или преподавателю, чтобы работать вместе.</p>
+    <p class="sub">
+      Отправьте ссылку ученику или преподавателю, чтобы работать вместе.
+    </p>
   </dialog>
 
   <dialog id="shareDialog">
     <h2>Пригласить на доску</h2>
-    <p>Все, у кого есть эта ссылка, смогут просматривать и редактировать доску.</p>
+    <p>
+      Все, у кого есть эта ссылка, смогут просматривать и редактировать доску.
+    </p>
     <input id="shareLink" readonly aria-label="Ссылка на доску">
     <div class="dialog-actions">
       <button id="copy" class="primary">Скопировать ссылку</button>
