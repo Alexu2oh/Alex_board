@@ -4,7 +4,6 @@ const ctx = canvas.getContext('2d');
 let width = window.innerWidth;
 let height = window.innerHeight;
 
-// Зум и панорамирование (Miro-стиль)
 let scale = 1;
 let panX = 0;
 let panY = 0;
@@ -14,11 +13,37 @@ let startPanX = 0;
 let startPanY = 0;
 let isSpacePressed = false;
 
-// Состояние доски
 let elements = [];
-let currentMode = 'draw'; // 'draw' или 'eraser'
+let currentMode = 'select'; // select, draw, eraser
 let isDrawing = false;
 let currentStroke = [];
+let draggedElement = null;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+
+// Полный список из 50 вокальных эффектов и значков
+const vocalEffects = [
+  "Вибрато классическое", "Вибрато широкое", "Вибрато частое", "Глиссандо вверх", "Глиссандо вниз",
+  "Пиано (p)", "Форте (f)", "Меццо-пиано (mp)", "Меццо-форте (mf)", "Пианиссимо (pp)",
+  "Фортиссимо (ff)", "Акцент (>)", "Стендо (staccato)", "Легато (legato)", "Портаменто",
+  "Субтон (subtone)", "Фальцет (falsetto)", "Тванг (twang)", "Белтинг (belting)", "Йодль (yodel)",
+  "Микст (mixed voice)", "Грудной регистр", "Головной регистр", "Штрабас (vocal fry)", "Овердрайв",
+  "Драйв / Скрим", "Фрай", "Йодль-модуляция", "Мелизм плавный", "Мелизм быстрый",
+  "Форшлаг", "Мордент", "Трель", "Вибрато затухающее", "Вибрато нарастающее",
+  "Нос. резонанс (nasal)", "Зевок (open throat)", "Атака твердая", "Атака мягкая", "Атака придыхательная",
+  "Фразировка вверх", "Фразировка вниз", "Динамическая волна", "Пауза / Цезура", "Фермата",
+  "Ритмический акцент", "Синкопа", "Вибрато вибрато", "Глиссандо хроматическое", "Финал / Кода"
+];
+
+// Заполняем выпадающий список эффектов в HTML
+const effectsContainer = document.getElementById('effects-list');
+vocalEffects.forEach(effect => {
+  const div = document.createElement('div');
+  div.className = 'effect-item';
+  div.innerText = effect;
+  div.onclick = () => addVocalEffect(effect);
+  effectsContainer.appendChild(div);
+});
 
 function resizeCanvas() {
   width = window.innerWidth;
@@ -31,6 +56,7 @@ window.addEventListener('resize', resizeCanvas);
 
 function setMode(mode) {
   currentMode = mode;
+  document.getElementById('btn-select').classList.toggle('active', mode === 'select');
   document.getElementById('btn-draw').classList.toggle('active', mode === 'draw');
   document.getElementById('btn-eraser').classList.toggle('active', mode === 'eraser');
 }
@@ -42,7 +68,6 @@ function clearBoard() {
   }
 }
 
-// Управление пробелом для перемещения
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !isSpacePressed) {
     isSpacePressed = true;
@@ -56,7 +81,6 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-// Плавный зум колесиком мыши
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   const zoomFactor = 1.08;
@@ -73,7 +97,6 @@ canvas.addEventListener('wheel', (e) => {
   render();
 }, { passive: false });
 
-// События мыши / рисования / ластика
 canvas.addEventListener('mousedown', (e) => {
   if (isSpacePressed || e.button === 1) {
     isPanning = true;
@@ -85,7 +108,14 @@ canvas.addEventListener('mousedown', (e) => {
 
   const worldPos = screenToWorld(e.clientX, e.clientY);
 
-  if (currentMode === 'draw') {
+  if (currentMode === 'select') {
+    // Ищем элемент под курсором для перетаскивания
+    draggedElement = elements.slice().reverse().find(el => hitTest(worldPos, el));
+    if (draggedElement) {
+      dragOffsetX = worldPos.x - draggedElement.x;
+      dragOffsetY = worldPos.y - draggedElement.y;
+    }
+  } else if (currentMode === 'draw') {
     isDrawing = true;
     currentStroke = [{ x: worldPos.x, y: worldPos.y }];
   } else if (currentMode === 'eraser') {
@@ -103,6 +133,13 @@ canvas.addEventListener('mousemove', (e) => {
 
   const worldPos = screenToWorld(e.clientX, e.clientY);
 
+  if (draggedElement && currentMode === 'select') {
+    draggedElement.x = worldPos.x - dragOffsetX;
+    draggedElement.y = worldPos.y - dragOffsetY;
+    render();
+    return;
+  }
+
   if (isDrawing && currentMode === 'draw') {
     currentStroke.push({ x: worldPos.x, y: worldPos.y });
     render();
@@ -116,11 +153,12 @@ canvas.addEventListener('mouseup', () => {
     isPanning = false;
     document.body.style.cursor = isSpacePressed ? 'grab' : 'default';
   }
+  draggedElement = null;
 
   if (isDrawing && currentMode === 'draw') {
     isDrawing = false;
     if (currentStroke.length > 0) {
-      elements.push({ type: 'stroke', points: currentStroke, color: '#6366f1', width: 4 });
+      elements.push({ type: 'stroke', points: currentStroke, color: '#818cf8', width: 3 });
       currentStroke = [];
     }
     render();
@@ -134,28 +172,28 @@ function screenToWorld(sx, sy) {
   };
 }
 
-// Логика ластика
+function hitTest(pos, el) {
+  if (el.type === 'image') {
+    return pos.x >= el.x && pos.x <= el.x + el.w && pos.y >= el.y && pos.y <= el.y + el.h;
+  }
+  if (el.type === 'shape' || el.type === 'chord') {
+    return Math.hypot(el.x - pos.x, el.y - pos.y) < 50;
+  }
+  return false;
+}
+
 function eraseAt(pos) {
   const radius = 15 / scale;
   elements = elements.filter(el => {
     if (el.type === 'stroke') {
-      // Проверяем пересечение с точками штриха
-      let hits = el.points.some(pt => Math.hypot(pt.x - pos.x, pt.y - pos.y) <= radius);
-      return !hits;
+      return !el.points.some(pt => Math.hypot(pt.x - pos.x, pt.y - pos.y) <= radius);
     }
-    // Картинки и заготовки удаляем по клику/стиранию в их области
-    if (el.type === 'image') {
-      return !(pos.x >= el.x && pos.x <= el.x + el.w && pos.y >= el.y && pos.y <= el.y + el.h);
-    }
-    if (el.type === 'shape') {
-      return !(Math.hypot(el.x - pos.x, el.y - pos.y) < 30);
-    }
-    return true;
+    return !hitTest(pos, el);
   });
   render();
 }
 
-// DRAG & DROP СКРИНШОТОВ (перетаскивание картинок)
+// DRAG & DROP СКРИНШОТОВ
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
@@ -166,10 +204,8 @@ window.addEventListener('drop', (e) => {
       const img = new Image();
       img.onload = () => {
         const dropPos = screenToWorld(e.clientX, e.clientY);
-        // Ограничим начальный размер картинки для удобства
-        let w = img.width > 800 ? 800 : img.width;
+        let w = img.width > 900 ? 900 : img.width;
         let h = (img.height * w) / img.width;
-        
         elements.push({
           type: 'image',
           img: img,
@@ -186,19 +222,31 @@ window.addEventListener('drop', (e) => {
   }
 });
 
-// Добавление музыкальных/вокальных заготовок
-window.addShape = function(shapeType) {
+function addVocalEffect(name) {
   const centerWorld = screenToWorld(width / 2, height / 2);
   elements.push({
     type: 'shape',
-    shape: shapeType,
+    text: name,
     x: centerWorld.x,
     y: centerWorld.y
   });
   render();
+}
+
+window.addChordPrompt = function() {
+  const chordName = prompt("Введите аккорд (например, Am7, Cmaj7, G):", "Am");
+  if (chordName) {
+    const centerWorld = screenToWorld(width / 2, height / 2);
+    elements.push({
+      type: 'chord',
+      text: chordName,
+      x: centerWorld.x,
+      y: centerWorld.y
+    });
+    render();
+  }
 };
 
-// Главная функция рендеринга
 function render() {
   ctx.clearRect(0, 0, width, height);
 
@@ -208,7 +256,6 @@ function render() {
 
   drawGrid();
 
-  // Отрисовка всех элементов доски
   elements.forEach(el => {
     if (el.type === 'image') {
       ctx.drawImage(el.img, el.x, el.y, el.w, el.h);
@@ -223,15 +270,33 @@ function render() {
       });
       ctx.stroke();
     } else if (el.type === 'shape') {
-      drawVocalShape(el);
+      ctx.save();
+      ctx.translate(el.x, el.y);
+      ctx.fillStyle = 'rgba(30, 30, 42, 0.9)';
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(-10, -22, ctx.measureText(el.text).width + 20, 34, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '14px sans-serif';
+      ctx.fillText(el.text, 0, 0);
+      ctx.restore();
+    } else if (el.type === 'chord') {
+      ctx.save();
+      ctx.translate(el.x, el.y);
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText(el.text, 0, 0);
+      ctx.restore();
     }
   });
 
-  // Штрих в процессе рисования
   if (isDrawing && currentStroke.length > 0) {
     ctx.beginPath();
-    ctx.strokeStyle = '#6366f1';
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#818cf8';
+    ctx.lineWidth = 3;
     ctx.lineCap = 'round';
     currentStroke.forEach((pt, i) => {
       if (i === 0) ctx.moveTo(pt.x, pt.y);
@@ -243,10 +308,9 @@ function render() {
   ctx.restore();
 }
 
-// Сетка фона доски
 function drawGrid() {
-  const gridSize = 50;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  const gridSize = 60;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
   ctx.lineWidth = 1;
 
   const startX = Math.floor((-panX / scale) / gridSize) * gridSize;
@@ -255,52 +319,11 @@ function drawGrid() {
   const endY = startY + (height / scale) + gridSize * 2;
 
   for (let x = startX; x < endX; x += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(x, startY);
-    ctx.lineTo(x, endY);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, startY); ctx.lineTo(x, endY); ctx.stroke();
   }
   for (let y = startY; y < endY; y += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(startX, y);
-    ctx.lineTo(endX, y);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(startX, y); ctx.lineTo(endX, y); ctx.stroke();
   }
-}
-
-// Отрисовка вокальных графических значков
-function drawVocalShape(el) {
-  ctx.save();
-  ctx.translate(el.x, el.y);
-  ctx.fillStyle = '#f59e0b';
-  ctx.strokeStyle = '#f59e0b';
-  ctx.lineWidth = 3;
-  ctx.font = 'bold 32px sans-serif';
-
-  if (el.shape === 'vibrato') {
-    ctx.beginPath();
-    for (let x = 0; x < 120; x += 12) {
-      ctx.lineTo(x, Math.sin(x * 0.2) * 14);
-    }
-    ctx.stroke();
-  } else if (el.shape === 'glissando') {
-    ctx.beginPath();
-    ctx.moveTo(0, 25);
-    ctx.lineTo(90, -25);
-    ctx.stroke();
-    ctx.lineTo(75, -25);
-    ctx.moveTo(90, -25);
-    ctx.lineTo(90, -10);
-    ctx.stroke();
-  } else if (el.shape === 'piano') {
-    ctx.fillText('p', 0, 0);
-  } else if (el.shape === 'forte') {
-    ctx.fillText('f', 0, 0);
-  } else if (el.shape === 'accent') {
-    ctx.fillText('❯', 0, 0);
-  }
-
-  ctx.restore();
 }
 
 resizeCanvas();
