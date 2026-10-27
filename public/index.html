@@ -55,7 +55,7 @@
 
     .divider { width: 1px; height: 26px; background: rgba(255,255,255,0.15); }
 
-    /* Выпадающее меню вокальных эффектов (50+ штук) */
+    /* Выпадающее меню вокальных эффектов (50 штук) */
     .dropdown {
       position: relative;
       display: inline-block;
@@ -115,12 +115,10 @@
 
     <div class="divider"></div>
 
-    <!-- Меню вокальных эффектов (50 штук) -->
+    <!-- Полный каталог из 50 вокальных эффектов -->
     <div class="dropdown">
-      <button class="tool-btn">🎤 Вокальные эффекты (50+) ▾</button>
-      <div class="dropdown-content" id="effects-list">
-        <!-- Заполняется скриптом -->
-      </div>
+      <button class="tool-btn">🎤 Вокальные эффекты (50) ▾</button>
+      <div class="dropdown-content" id="effects-list"></div>
     </div>
 
     <div class="divider"></div>
@@ -132,11 +130,11 @@
   </div>
 
   <div class="hint">
-    💡 Перетаскивайте скриншоты и значки мышкой | Зум: Колесико | Панорамирование: Пробел + Мышь
+    🖼 Перетащите скриншот в любое окно | 🔍 Зум: Колесико / Тачпад | ✋ Перемещение холста: Зажать правую кнопку мыши (ПКМ) и вести
   </div>
 
   <div id="board-container">
-    <canvas id="board"></canvas>
+    <canvas id="board" oncontextmenu="return false;"></canvas>
   </div>
 
   <script src="resize.js"></script>
