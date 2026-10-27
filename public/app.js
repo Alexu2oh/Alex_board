@@ -11,7 +11,6 @@ let panY = 0;
 let isPanning = false;
 let startPanX = 0;
 let startPanY = 0;
-let isSpacePressed = false;
 
 let elements = [];
 let currentMode = 'select'; // select, draw, eraser
@@ -21,21 +20,21 @@ let draggedElement = null;
 let dragOffsetX = 0;
 let dragOffsetY = 0;
 
-// Полный список из 50 вокальных эффектов и значков
+// Полный каталог из 50 профессиональных вокальных эффектов
 const vocalEffects = [
   "Вибрато классическое", "Вибрато широкое", "Вибрато частое", "Глиссандо вверх", "Глиссандо вниз",
   "Пиано (p)", "Форте (f)", "Меццо-пиано (mp)", "Меццо-форте (mf)", "Пианиссимо (pp)",
-  "Фортиссимо (ff)", "Акцент (>)", "Стендо (staccato)", "Легато (legato)", "Портаменто",
+  "Фортиссимо (ff)", "Акцент (>)", "Стаккато (staccato)", "Легато (legato)", "Портаменто",
   "Субтон (subtone)", "Фальцет (falsetto)", "Тванг (twang)", "Белтинг (belting)", "Йодль (yodel)",
   "Микст (mixed voice)", "Грудной регистр", "Головной регистр", "Штрабас (vocal fry)", "Овердрайв",
   "Драйв / Скрим", "Фрай", "Йодль-модуляция", "Мелизм плавный", "Мелизм быстрый",
   "Форшлаг", "Мордент", "Трель", "Вибрато затухающее", "Вибрато нарастающее",
-  "Нос. резонанс (nasal)", "Зевок (open throat)", "Атака твердая", "Атака мягкая", "Атака придыхательная",
+  "Носовой резонанс", "Зевок (open throat)", "Атака твердая", "Атака мягкая", "Атака придыхательная",
   "Фразировка вверх", "Фразировка вниз", "Динамическая волна", "Пауза / Цезура", "Фермата",
-  "Ритмический акцент", "Синкопа", "Вибрато вибрато", "Глиссандо хроматическое", "Финал / Кода"
+  "Ритмический акцент", "Синкопа", "Вибрато пульсирующее", "Глиссандо хроматическое", "Финал / Кода"
 ];
 
-// Заполняем выпадающий список эффектов в HTML
+// Заполняем выпадающий список 50 эффектами
 const effectsContainer = document.getElementById('effects-list');
 vocalEffects.forEach(effect => {
   const div = document.createElement('div');
@@ -68,19 +67,7 @@ function clearBoard() {
   }
 }
 
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !isSpacePressed) {
-    isSpacePressed = true;
-    document.body.style.cursor = 'grab';
-  }
-});
-window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') {
-    isSpacePressed = false;
-    document.body.style.cursor = 'default';
-  }
-});
-
+// Плавный зум колесиком мыши / тачпадом
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   const zoomFactor = 1.08;
@@ -97,8 +84,9 @@ canvas.addEventListener('wheel', (e) => {
   render();
 }, { passive: false });
 
+// События мыши (ПКМ — перемещение холста без пробела)
 canvas.addEventListener('mousedown', (e) => {
-  if (isSpacePressed || e.button === 1) {
+  if (e.button === 2) { // Правая кнопка мыши (ПКМ)
     isPanning = true;
     startPanX = e.clientX - panX;
     startPanY = e.clientY - panY;
@@ -108,18 +96,19 @@ canvas.addEventListener('mousedown', (e) => {
 
   const worldPos = screenToWorld(e.clientX, e.clientY);
 
-  if (currentMode === 'select') {
-    // Ищем элемент под курсором для перетаскивания
-    draggedElement = elements.slice().reverse().find(el => hitTest(worldPos, el));
-    if (draggedElement) {
-      dragOffsetX = worldPos.x - draggedElement.x;
-      dragOffsetY = worldPos.y - draggedElement.y;
+  if (e.button === 0) { // Левая кнопка мыши
+    if (currentMode === 'select') {
+      draggedElement = elements.slice().reverse().find(el => hitTest(worldPos, el));
+      if (draggedElement) {
+        dragOffsetX = worldPos.x - draggedElement.x;
+        dragOffsetY = worldPos.y - draggedElement.y;
+      }
+    } else if (currentMode === 'draw') {
+      isDrawing = true;
+      currentStroke = [{ x: worldPos.x, y: worldPos.y }];
+    } else if (currentMode === 'eraser') {
+      eraseAt(worldPos);
     }
-  } else if (currentMode === 'draw') {
-    isDrawing = true;
-    currentStroke = [{ x: worldPos.x, y: worldPos.y }];
-  } else if (currentMode === 'eraser') {
-    eraseAt(worldPos);
   }
 });
 
@@ -148,10 +137,10 @@ canvas.addEventListener('mousemove', (e) => {
   }
 });
 
-canvas.addEventListener('mouseup', () => {
-  if (isPanning) {
+canvas.addEventListener('mouseup', (e) => {
+  if (isPanning && e.button === 2) {
     isPanning = false;
-    document.body.style.cursor = isSpacePressed ? 'grab' : 'default';
+    document.body.style.cursor = 'default';
   }
   draggedElement = null;
 
@@ -177,7 +166,7 @@ function hitTest(pos, el) {
     return pos.x >= el.x && pos.x <= el.x + el.w && pos.y >= el.y && pos.y <= el.y + el.h;
   }
   if (el.type === 'shape' || el.type === 'chord') {
-    return Math.hypot(el.x - pos.x, el.y - pos.y) < 50;
+    return Math.hypot(el.x - pos.x, el.y - pos.y) < 60;
   }
   return false;
 }
@@ -193,7 +182,7 @@ function eraseAt(pos) {
   render();
 }
 
-// DRAG & DROP СКРИНШОТОВ
+// Drag & Drop скриншотов
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
@@ -272,15 +261,16 @@ function render() {
     } else if (el.type === 'shape') {
       ctx.save();
       ctx.translate(el.x, el.y);
-      ctx.fillStyle = 'rgba(30, 30, 42, 0.9)';
+      ctx.fillStyle = 'rgba(26, 26, 36, 0.92)';
       ctx.strokeStyle = '#6366f1';
       ctx.lineWidth = 2;
+      const textWidth = ctx.measureText(el.text).width;
       ctx.beginPath();
-      ctx.roundRect(-10, -22, ctx.measureText(el.text).width + 20, 34, 8);
+      ctx.roundRect(-12, -22, textWidth + 24, 36, 10);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#f8fafc';
-      ctx.font = '14px sans-serif';
+      ctx.font = '13px sans-serif';
       ctx.fillText(el.text, 0, 0);
       ctx.restore();
     } else if (el.type === 'chord') {
