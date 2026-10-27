@@ -4,7 +4,7 @@ const ctx = canvas.getContext('2d');
 let width = window.innerWidth;
 let height = window.innerHeight;
 
-// Трансформация (Зум и Панорамирование как в Miro)
+// Зум и панорамирование (Miro-стиль)
 let scale = 1;
 let panX = 0;
 let panY = 0;
@@ -14,9 +14,9 @@ let startPanX = 0;
 let startPanY = 0;
 let isSpacePressed = false;
 
-// Элементы доски (картинки, заготовки, штрихи)
+// Состояние доски
 let elements = [];
-let currentMode = 'draw'; // 'draw' или 'erase'
+let currentMode = 'draw'; // 'draw' или 'eraser'
 let isDrawing = false;
 let currentStroke = [];
 
@@ -27,17 +27,28 @@ function resizeCanvas() {
   canvas.height = height;
   render();
 }
-
 window.addEventListener('resize', resizeCanvas);
 
-// Обработка клавиши Пробел для панорамирования
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn-draw').classList.toggle('active', mode === 'draw');
+  document.getElementById('btn-eraser').classList.toggle('active', mode === 'eraser');
+}
+
+function clearBoard() {
+  if (confirm('Очистить всю доску?')) {
+    elements = [];
+    render();
+  }
+}
+
+// Управление пробелом для перемещения
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !isSpacePressed) {
     isSpacePressed = true;
     document.body.style.cursor = 'grab';
   }
 });
-
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') {
     isSpacePressed = false;
@@ -45,17 +56,16 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-// Зум (Scale)
+// Плавный зум колесиком мыши
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  const zoomFactor = 1.05;
+  const zoomFactor = 1.08;
   const mouseX = e.clientX;
   const mouseY = e.clientY;
 
   let newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
-  newScale = Math.min(Math.max(0.2, newScale), 5); // ограничение зума
+  newScale = Math.min(Math.max(0.15, newScale), 6);
 
-  // Масштабирование относительно курсора
   panX = mouseX - (mouseX - panX) * (newScale / scale);
   panY = mouseY - (mouseY - panY) * (newScale / scale);
   scale = newScale;
@@ -63,9 +73,9 @@ canvas.addEventListener('wheel', (e) => {
   render();
 }, { passive: false });
 
-// Мышь / Тач
+// События мыши / рисования / ластика
 canvas.addEventListener('mousedown', (e) => {
-  if (isSpacePressed || e.button === 1) { // Пробел или средняя кнопка
+  if (isSpacePressed || e.button === 1) {
     isPanning = true;
     startPanX = e.clientX - panX;
     startPanY = e.clientY - panY;
@@ -73,10 +83,13 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
+  const worldPos = screenToWorld(e.clientX, e.clientY);
+
   if (currentMode === 'draw') {
     isDrawing = true;
-    const worldPos = screenToWorld(e.clientX, e.clientY);
     currentStroke = [{ x: worldPos.x, y: worldPos.y }];
+  } else if (currentMode === 'eraser') {
+    eraseAt(worldPos);
   }
 });
 
@@ -88,10 +101,13 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
-  if (isDrawing) {
-    const worldPos = screenToWorld(e.clientX, e.clientY);
+  const worldPos = screenToWorld(e.clientX, e.clientY);
+
+  if (isDrawing && currentMode === 'draw') {
     currentStroke.push({ x: worldPos.x, y: worldPos.y });
     render();
+  } else if (currentMode === 'eraser' && e.buttons === 1) {
+    eraseAt(worldPos);
   }
 });
 
@@ -101,17 +117,16 @@ canvas.addEventListener('mouseup', () => {
     document.body.style.cursor = isSpacePressed ? 'grab' : 'default';
   }
 
-  if (isDrawing) {
+  if (isDrawing && currentMode === 'draw') {
     isDrawing = false;
     if (currentStroke.length > 0) {
-      elements.push({ type: 'stroke', points: currentStroke, color: '#ff4757', width: 3 });
+      elements.push({ type: 'stroke', points: currentStroke, color: '#6366f1', width: 4 });
       currentStroke = [];
     }
     render();
   }
 });
 
-// Перевод координат экрана в координаты мира доски
 function screenToWorld(sx, sy) {
   return {
     x: (sx - panX) / scale,
@@ -119,7 +134,28 @@ function screenToWorld(sx, sy) {
   };
 }
 
-// DRAG & DROP СКРИНШОТОВ
+// Логика ластика
+function eraseAt(pos) {
+  const radius = 15 / scale;
+  elements = elements.filter(el => {
+    if (el.type === 'stroke') {
+      // Проверяем пересечение с точками штриха
+      let hits = el.points.some(pt => Math.hypot(pt.x - pos.x, pt.y - pos.y) <= radius);
+      return !hits;
+    }
+    // Картинки и заготовки удаляем по клику/стиранию в их области
+    if (el.type === 'image') {
+      return !(pos.x >= el.x && pos.x <= el.x + el.w && pos.y >= el.y && pos.y <= el.y + el.h);
+    }
+    if (el.type === 'shape') {
+      return !(Math.hypot(el.x - pos.x, el.y - pos.y) < 30);
+    }
+    return true;
+  });
+  render();
+}
+
+// DRAG & DROP СКРИНШОТОВ (перетаскивание картинок)
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
@@ -130,13 +166,17 @@ window.addEventListener('drop', (e) => {
       const img = new Image();
       img.onload = () => {
         const dropPos = screenToWorld(e.clientX, e.clientY);
+        // Ограничим начальный размер картинки для удобства
+        let w = img.width > 800 ? 800 : img.width;
+        let h = (img.height * w) / img.width;
+        
         elements.push({
           type: 'image',
           img: img,
-          x: dropPos.x - img.width / 4,
-          y: dropPos.y - img.height / 4,
-          w: img.width / 2,
-          h: img.height / 2
+          x: dropPos.x - w / 2,
+          y: dropPos.y - h / 2,
+          w: w,
+          h: h
         });
         render();
       };
@@ -146,7 +186,7 @@ window.addEventListener('drop', (e) => {
   }
 });
 
-// Добавление заготовок (вокальная графика)
+// Добавление музыкальных/вокальных заготовок
 window.addShape = function(shapeType) {
   const centerWorld = screenToWorld(width / 2, height / 2);
   elements.push({
@@ -158,7 +198,7 @@ window.addShape = function(shapeType) {
   render();
 };
 
-// Отрисовка
+// Главная функция рендеринга
 function render() {
   ctx.clearRect(0, 0, width, height);
 
@@ -166,10 +206,9 @@ function render() {
   ctx.translate(panX, panY);
   ctx.scale(scale, scale);
 
-  // Сетка доски
   drawGrid();
 
-  // Отрисовка элементов
+  // Отрисовка всех элементов доски
   elements.forEach(el => {
     if (el.type === 'image') {
       ctx.drawImage(el.img, el.x, el.y, el.w, el.h);
@@ -188,11 +227,11 @@ function render() {
     }
   });
 
-  // Рисование текущей линии
+  // Штрих в процессе рисования
   if (isDrawing && currentStroke.length > 0) {
     ctx.beginPath();
-    ctx.strokeStyle = '#ff4757';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#6366f1';
+    ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     currentStroke.forEach((pt, i) => {
       if (i === 0) ctx.moveTo(pt.x, pt.y);
@@ -204,10 +243,10 @@ function render() {
   ctx.restore();
 }
 
-// Отрисовка фоновой сетки
+// Сетка фона доски
 function drawGrid() {
-  const gridSize = 40;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  const gridSize = 50;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
   ctx.lineWidth = 1;
 
   const startX = Math.floor((-panX / scale) / gridSize) * gridSize;
@@ -229,30 +268,29 @@ function drawGrid() {
   }
 }
 
-// Отрисовка вокальных заготовок
+// Отрисовка вокальных графических значков
 function drawVocalShape(el) {
   ctx.save();
   ctx.translate(el.x, el.y);
   ctx.fillStyle = '#f59e0b';
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 3;
-  ctx.font = 'bold 28px sans-serif';
+  ctx.font = 'bold 32px sans-serif';
 
   if (el.shape === 'vibrato') {
     ctx.beginPath();
-    for (let x = 0; x < 100; x += 10) {
-      ctx.lineTo(x, Math.sin(x * 0.2) * 12);
+    for (let x = 0; x < 120; x += 12) {
+      ctx.lineTo(x, Math.sin(x * 0.2) * 14);
     }
     ctx.stroke();
   } else if (el.shape === 'glissando') {
     ctx.beginPath();
-    ctx.moveTo(0, 20);
-    ctx.lineTo(80, -20);
+    ctx.moveTo(0, 25);
+    ctx.lineTo(90, -25);
     ctx.stroke();
-    // Стрелочка
-    ctx.lineTo(70, -20);
-    ctx.moveTo(80, -20);
-    ctx.lineTo(80, -10);
+    ctx.lineTo(75, -25);
+    ctx.moveTo(90, -25);
+    ctx.lineTo(90, -10);
     ctx.stroke();
   } else if (el.shape === 'piano') {
     ctx.fillText('p', 0, 0);
