@@ -6,27 +6,39 @@ import {
   readFileSync,
   mkdirSync,
   writeFileSync,
-  existsSync
+  createWriteStream
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pipeline } from 'node:stream/promises';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 const allowed = new Set([
-  'sticky', 'text', 'staff', 'chord', 'symbol',
-  'stroke', 'circle', 'square', 'image'
+  'sticky',
+  'text',
+  'staff',
+  'chord',
+  'symbol',
+  'stroke',
+  'circle',
+  'square',
+  'image'
 ]);
 
 const token = /^[A-Za-z0-9_-]{32}$/;
 const objectId = /^[A-Za-z0-9_-]{1,80}$/;
+const imageName = /^[a-f0-9]{32}\.(png|jpg|webp|gif)$/;
 
-const imageTypes = new Map([
-  ['image/png', 'png'],
-  ['image/jpeg', 'jpg'],
-  ['image/webp', 'webp'],
-  ['image/gif', 'gif']
-]);
+const MAX_JSON_SIZE = 100_000;
+const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
+
+const imageTypes = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif'
+};
 
 const json = (res, status, data) => {
   res.writeHead(status, {
@@ -45,8 +57,8 @@ function readBody(req) {
     req.on('data', chunk => {
       size += chunk.length;
 
-      if (size > 100_000) {
-        reject(new Error('too large'));
+      if (size > MAX_JSON_SIZE) {
+        reject(new Error('request too large'));
         req.destroy();
         return;
       }
@@ -67,7 +79,8 @@ function readBody(req) {
 }
 
 function validObject(o) {
-  return o &&
+  return Boolean(
+    o &&
     typeof o === 'object' &&
     objectId.test(o.id || '') &&
     allowed.has(o.type) &&
@@ -75,16 +88,33 @@ function validObject(o) {
     Number.isFinite(o.y) &&
     Math.abs(o.x) < 1e6 &&
     Math.abs(o.y) < 1e6 &&
-    JSON.stringify(o).length < 50000;
+    JSON.stringify(o).length < 50000 &&
+    (
+      o.type !== 'image' ||
+      (
+        typeof o.src === 'string' &&
+        o.src.startsWith('/uploads/') &&
+        imageName.test(basename(o.src)) &&
+        Number.isFinite(o.width) &&
+        Number.isFinite(o.height) &&
+        o.width > 0 &&
+        o.height > 0 &&
+        o.width <= 10000 &&
+        o.height <= 10000
+      )
+    )
+  );
 }
 
 export function createServer({
-  database = process.env.DB_PATH ||
-    join(here, 'data', 'boards.sqlite')
+  database = process.env.DB_PATH || join(here, 'data', 'boards.sqlite'),
+  uploadDir = process.env.UPLOAD_DIR || join(here, 'data', 'uploads')
 } = {}) {
   if (database !== ':memory:') {
     mkdirSync(dirname(database), { recursive: true });
   }
+
+  mkdirSync(uploadDir, { recursive: true });
 
   const db = new DatabaseSync(database);
 
@@ -100,19 +130,15 @@ export function createServer({
       board_id TEXT NOT NULL,
       id TEXT NOT NULL,
       data TEXT NOT NULL,
-      PRIMARY KEY(board_id, id)
+      PRIMARY KEY (board_id, id)
     );
   `);
 
   const subscribers = new Map();
 
-  // Uploads live alongside the configured database.
-  const uploadDir = join(dirname(database), 'uploads');
-  mkdirSync(uploadDir, { recursive: true });
-
   const exists = id =>
     token.test(id) &&
-    !!db.prepare('SELECT id FROM boards WHERE id=?').get(id);
+    Boolean(db.prepare('SELECT id FROM boards WHERE id=?').get(id));
 
   const publish = (id, event) => {
     for (const res of subscribers.get(id) || []) {
@@ -130,11 +156,13 @@ export function createServer({
       if (
         req.method !== 'GET' &&
         req.headers.origin &&
+        req.headers.host &&
         new URL(req.headers.origin).host !== req.headers.host
       ) {
         return json(res, 403, { error: 'origin forbidden' });
       }
 
+      // Создание доски
       if (req.method === 'POST' && path === '/api/boards') {
         const id = randomBytes(24).toString('base64url');
 
@@ -143,56 +171,93 @@ export function createServer({
         return json(res, 201, { id });
       }
 
-      // Serve uploaded images.
-      if (req.method === 'GET') {
-        const uploadMatch = path.match(
-          /^\/uploads\/([a-f0-9]{36}\.(?:png|jpg|webp|gif))$/
-        );
+      // Загрузка изображения:
+      // POST /api/boards/:id/objects/image-upload
+      const uploadMatch = path.match(
+        /^\/api\/boards\/([^/]+)\/objects\/image-upload$/
+      );
 
-        if (uploadMatch) {
-          const file = join(uploadDir, uploadMatch[1]);
+      if (req.method === 'POST' && uploadMatch) {
+        const [, boardId] = uploadMatch;
 
-          if (!existsSync(file)) {
-            return json(res, 404, { error: 'image not found' });
+        if (!exists(boardId)) {
+          return json(res, 404, { error: 'board not found' });
+        }
+
+        const contentType = String(
+          req.headers['content-type'] || ''
+        ).split(';')[0].trim().toLowerCase();
+
+        const extension = imageTypes[contentType];
+
+        if (!extension) {
+          return json(res, 415, {
+            error: 'unsupported image type'
+          });
+        }
+
+        const chunks = [];
+        let totalSize = 0;
+
+        for await (const chunk of req) {
+          totalSize += chunk.length;
+
+          if (totalSize > MAX_IMAGE_SIZE) {
+            return json(res, 413, {
+              error: 'image too large; maximum is 8 MB'
+            });
           }
 
-          const ext = file.split('.').pop();
-          const mime = {
-            png: 'image/png',
-            jpg: 'image/jpeg',
-            webp: 'image/webp',
-            gif: 'image/gif'
-          }[ext];
-
-          res.writeHead(200, {
-            'content-type': mime,
-            'x-content-type-options': 'nosniff',
-            'cache-control': 'public, max-age=31536000, immutable'
-          });
-
-          return res.end(readFileSync(file));
+          chunks.push(chunk);
         }
 
-        const files = {
-          '/': ['index.html', 'text/html; charset=utf-8'],
-          '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-          '/resize.js': ['resize.js', 'text/javascript; charset=utf-8'],
-          '/style.css': ['style.css', 'text/css; charset=utf-8']
+        if (totalSize === 0) {
+          return json(res, 400, { error: 'empty image' });
+        }
+
+        const buffer = Buffer.concat(chunks);
+
+        // Проверяем сигнатуру файла, а не только Content-Type.
+        const signatures = {
+          png: buffer.length >= 8 &&
+            buffer.subarray(0, 8).equals(
+              Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+            ),
+
+          jpg: buffer.length >= 3 &&
+            buffer[0] === 0xff &&
+            buffer[1] === 0xd8 &&
+            buffer[2] === 0xff,
+
+          webp: buffer.length >= 12 &&
+            buffer.toString('ascii', 0, 4) === 'RIFF' &&
+            buffer.toString('ascii', 8, 12) === 'WEBP',
+
+          gif: buffer.length >= 6 &&
+            ['GIF87a', 'GIF89a'].includes(
+              buffer.toString('ascii', 0, 6)
+            )
         };
 
-        const f = files[path];
-
-        if (f) {
-          res.writeHead(200, {
-            'content-type': f[1],
-            'x-content-type-options': 'nosniff',
-            'cache-control': 'no-cache'
+        if (!signatures[extension]) {
+          return json(res, 400, {
+            error: 'invalid image file'
           });
-
-          return res.end(readFileSync(join(here, 'public', f[0])));
         }
+
+        const filename =
+          `${randomBytes(16).toString('hex')}.${extension}`;
+
+        const destination = join(uploadDir, filename);
+
+        writeFileSync(destination, buffer, { flag: 'wx' });
+
+        return json(res, 201, {
+          url: `/uploads/${filename}`
+        });
       }
 
+      // API досок и объектов
       const match = path.match(
         /^\/api\/boards\/([^/]+)(?:\/(objects|events|cursor)(?:\/([^/]+))?)?$/
       );
@@ -208,12 +273,18 @@ export function createServer({
           db.exec('BEGIN');
 
           try {
-            db.prepare('DELETE FROM objects WHERE board_id=?').run(id);
-            db.prepare('DELETE FROM boards WHERE id=?').run(id);
+            db.prepare(
+              'DELETE FROM objects WHERE board_id=?'
+            ).run(id);
+
+            db.prepare(
+              'DELETE FROM boards WHERE id=?'
+            ).run(id);
+
             db.exec('COMMIT');
-          } catch (e) {
+          } catch (error) {
             db.exec('ROLLBACK');
-            throw e;
+            throw error;
           }
 
           publish(id, { kind: 'board-deleted' });
@@ -226,11 +297,11 @@ export function createServer({
         }
 
         if (req.method === 'GET' && !part) {
-          return json(res, 200, {
-            objects: db.prepare(
-              'SELECT data FROM objects WHERE board_id=?'
-            ).all(id).map(row => JSON.parse(row.data))
-          });
+          const objects = db.prepare(
+            'SELECT data FROM objects WHERE board_id=?'
+          ).all(id).map(row => JSON.parse(row.data));
+
+          return json(res, 200, { objects });
         }
 
         if (req.method === 'GET' && part === 'events') {
@@ -256,6 +327,7 @@ export function createServer({
 
           req.on('close', () => {
             clearInterval(timer);
+
             subscribers.get(id)?.delete(res);
 
             if (!subscribers.get(id)?.size) {
@@ -266,76 +338,30 @@ export function createServer({
           return;
         }
 
-        // Upload PNG, JPG, WebP or GIF (maximum 8 MB).
-        if (
-          req.method === 'POST' &&
-          part === 'objects' &&
-          oid === 'image-upload'
-        ) {
-          const mime = (req.headers['content-type'] || '')
-            .split(';')[0]
-            .trim()
-            .toLowerCase();
-
-          const ext = imageTypes.get(mime);
-
-          if (!ext) {
-            return json(res, 415, {
-              error: 'unsupported image type'
-            });
-          }
-
-          const chunks = [];
-          let size = 0;
-
-          for await (const chunk of req) {
-            size += chunk.length;
-
-            if (size > 8 * 1024 * 1024) {
-              return json(res, 413, {
-                error: 'image too large; maximum 8 MB'
-              });
-            }
-
-            chunks.push(chunk);
-          }
-
-          if (!size) {
-            return json(res, 400, { error: 'empty image' });
-          }
-
-          const file = randomBytes(18).toString('hex') + '.' + ext;
-
-          writeFileSync(
-            join(uploadDir, file),
-            Buffer.concat(chunks),
-            { flag: 'wx' }
-          );
-
-          return json(res, 201, {
-            url: '/uploads/' + file
-          });
-        }
-
         if (
           req.method === 'PUT' &&
           part === 'objects' &&
           !oid
         ) {
-          const o = await readBody(req);
+          const object = await readBody(req);
 
-          if (!validObject(o)) {
-            return json(res, 400, { error: 'invalid object' });
+          if (!validObject(object)) {
+            return json(res, 400, {
+              error: 'invalid object'
+            });
           }
 
           db.prepare(`
-            INSERT INTO objects(board_id, id, data)
-            VALUES(?, ?, ?)
-            ON CONFLICT(board_id, id)
+            INSERT INTO objects(board_id,id,data)
+            VALUES(?,?,?)
+            ON CONFLICT(board_id,id)
             DO UPDATE SET data=excluded.data
-          `).run(id, o.id, JSON.stringify(o));
+          `).run(id, object.id, JSON.stringify(object));
 
-          publish(id, { kind: 'put', object: o });
+          publish(id, {
+            kind: 'put',
+            object
+          });
 
           return json(res, 200, { ok: true });
         }
@@ -349,35 +375,108 @@ export function createServer({
             'DELETE FROM objects WHERE board_id=? AND id=?'
           ).run(id, oid);
 
-          publish(id, { kind: 'delete', id: oid });
+          publish(id, {
+            kind: 'delete',
+            id: oid
+          });
 
           return json(res, 200, { ok: true });
         }
 
         if (req.method === 'POST' && part === 'cursor') {
-          const p = await readBody(req);
+          const cursor = await readBody(req);
 
           if (
-            !p ||
-            !objectId.test(p.id || '') ||
-            !Number.isFinite(p.x) ||
-            !Number.isFinite(p.y) ||
-            typeof p.name !== 'string' ||
-            p.name.length > 30
+            !cursor ||
+            !objectId.test(cursor.id || '') ||
+            !Number.isFinite(cursor.x) ||
+            !Number.isFinite(cursor.y) ||
+            typeof cursor.name !== 'string' ||
+            cursor.name.length > 30
           ) {
-            return json(res, 400, { error: 'invalid cursor' });
+            return json(res, 400, {
+              error: 'invalid cursor'
+            });
           }
 
-          publish(id, { kind: 'cursor', ...p });
+          publish(id, {
+            kind: 'cursor',
+            ...cursor
+          });
 
           return json(res, 200, { ok: true });
         }
 
-        return json(res, 405, { error: 'method not allowed' });
+        return json(res, 405, {
+          error: 'method not allowed'
+        });
+      }
+
+      // Раздача загруженных изображений
+      if (req.method === 'GET' && path.startsWith('/uploads/')) {
+        const filename = path.slice('/uploads/'.length);
+
+        if (!imageName.test(filename)) {
+          return json(res, 404, { error: 'not found' });
+        }
+
+        const filepath = join(uploadDir, filename);
+
+        let data;
+
+        try {
+          data = readFileSync(filepath);
+        } catch {
+          return json(res, 404, { error: 'image not found' });
+        }
+
+        const extension = filename.split('.').pop();
+
+        const mime = {
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          webp: 'image/webp',
+          gif: 'image/gif'
+        }[extension];
+
+        res.writeHead(200, {
+          'content-type': mime,
+          'content-length': data.length,
+          'cache-control': 'public, max-age=31536000, immutable',
+          'x-content-type-options': 'nosniff'
+        });
+
+        return res.end(data);
+      }
+
+      // Статические файлы приложения
+      if (req.method === 'GET') {
+        const files = {
+          '/': ['index.html', 'text/html; charset=utf-8'],
+          '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+          '/resize.js': ['resize.js', 'text/javascript; charset=utf-8'],
+          '/style.css': ['style.css', 'text/css; charset=utf-8']
+        };
+
+        const file = files[path];
+
+        if (file) {
+          res.writeHead(200, {
+            'content-type': file[1],
+            'x-content-type-options': 'nosniff',
+            'cache-control': 'no-cache'
+          });
+
+          return res.end(
+            readFileSync(join(here, 'public', file[0]))
+          );
+        }
       }
 
       return json(res, 404, { error: 'not found' });
     } catch (error) {
+      console.error('Request error:', error);
+
       if (!res.headersSent) {
         json(res, 400, { error: 'invalid request' });
       } else {
@@ -388,7 +487,9 @@ export function createServer({
 
   server.on('close', () => {
     for (const clients of subscribers.values()) {
-      for (const res of clients) res.end();
+      for (const res of clients) {
+        res.end();
+      }
     }
 
     db.close();
@@ -406,8 +507,10 @@ if (
   server.listen(
     Number(process.env.PORT || 3000),
     process.env.HOST || '0.0.0.0',
-    () => console.log(
-      `Фраза listening on port ${server.address().port}`
-    )
+    () => {
+      console.log(
+        `Фраза listening on port ${server.address().port}`
+      );
+    }
   );
 }
